@@ -35,7 +35,7 @@ def save_to_excel(url2phone: dict, out_path: Path):
 if __name__ == "__main__":
     data = load_data(INPUT_JSON)
 
-    #  Фильтрация служебных пометок
+    # Фильтрация служебных пометок
     filtered = {
         url: val
         for url, val in data.items()

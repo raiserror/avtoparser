@@ -12,30 +12,29 @@ from playwright.async_api import (
     Error as PWError,
 )
 
-# ========== НАСТРОЙКИ ==========
+# НАСТРОЙКИ
 
-CATEGORY_URL = (
-    "https://www.avito.ru/moskva/kvartiry/sdam/na_dlitelnyy_srok-ASgBAgICAkSSA8gQ8AeQUg?user=1"
-)
+CATEGORY_URL = "https://www.avito.ru/moskva/kvartiry/sdam/na_dlitelnyy_srok-ASgBAgICAkSSA8gQ8AeQUg?user=1"
 
 OUT_DIR = Path("avito_phones_playwright")
 OUT_DIR.mkdir(exist_ok=True)
 
-HEADLESS = False          # обязательно False — логинишься руками
-MAX_ITEMS = 5             # 5 ОБЪЯВЛЕНИЙ С НАЙДЕННОЙ КАРТИНКОЙ НОМЕРА
+HEADLESS = False  # Обязательно False — логинимся руками
+MAX_ITEMS = 5     # 5 ОБЪЯВЛЕНИЙ С НАЙДЕННОЙ КАРТИНКОЙ НОМЕРА
 
 PAGE_DELAY = 5
 CLICK_DELAY = 8
 NAV_TIMEOUT = 90_000
 
-USE_PROXY = False         # при необходимости включишь
+USE_PROXY = False  # При необходимости включаем
 PROXY_HOST = "mproxy.site"
 PROXY_PORT = 228
 PROXY_LOGIN = ""
 PROXY_PASSWORD = ""
 
 
-# ========== ХЕЛПЕРЫ ==========
+# ХЕЛПЕРЫ
+
 
 async def human_sleep(a: float, b: float):
     await asyncio.sleep(random.uniform(a, b))
@@ -107,7 +106,7 @@ async def close_login_modal_if_exists(page: Page) -> bool:
             except Exception:
                 continue
 
-            # пробуем найти любую кнопку закрытия
+            # Пробуем найти любую кнопку закрытия
             for btn_sel in [
                 "button[aria-label='Закрыть']",
                 "button[data-marker='modal-close']",
@@ -120,12 +119,12 @@ async def close_login_modal_if_exists(page: Page) -> bool:
                         if await btn.is_enabled():
                             await btn.click()
                             await human_sleep(0.4, 0.8)
-                            print("🔒 Модалка авторизации закрыта, объявление пропущено.")
+                            print("Модалка авторизации закрыта, объявление пропущено.")
                             return True
                     except Exception:
                         pass
 
-            print("🔒 Модалка авторизации не закрывается — объявление пропускаем.")
+            print("Модалка авторизации не закрывается — объявление пропускаем.")
             return True
 
     return False
@@ -136,13 +135,13 @@ async def extract_phone_image_data(item, page: Page, avito_id: str) -> Optional[
     После клика ищем img[data-marker='phone-image'],
     возвращаем data:image/png;base64,... (без сохранения PNG).
     """
-    # сначала ищем в пределах карточки
+    # Сначала ищем в пределах карточки
     try:
         img = await item.query_selector("img[data-marker='phone-image']")
     except PWError:
         img = None
 
-    # на всякий случай пробуем по всей странице
+    # На всякий случай пробуем по всей странице
     if not img:
         try:
             img = await page.query_selector("img[data-marker='phone-image']")
@@ -150,22 +149,20 @@ async def extract_phone_image_data(item, page: Page, avito_id: str) -> Optional[
             img = None
 
     if not img:
-        print(f"⚠️ [{avito_id}] Картинка с номером не найдена.")
+        print(f"[{avito_id}] Картинка с номером не найдена.")
         return None
 
     src = (await img.get_attribute("src")) or ""
     if not src.startswith("data:image"):
-        print(f"⚠️ [{avito_id}] src не data:image, а: {src[:40]}...")
+        print(f"[{avito_id}] src не data:image, а: {src[:40]}...")
         return None
 
-    print(f"✅ [{avito_id}] Получен data:image (длина {len(src)}).")
+    print(f"[{avito_id}] Получен data:image (длина {len(src)}).")
     return src  # просто возвращаем data-URI, не декодируем
 
 
 async def parse_phone_image_for_item(page: Page, item, idx_on_page: int) -> Optional[str]:
-    """
-    Кликает ТОЛЬКО по 'Показать телефон/номер' и возвращает data:image... или None.
-    """
+    """Кликает ТОЛЬКО по 'Показать телефон/номер' и возвращает data:image... или None."""
     avito_id = (await item.get_attribute("id")) or ""
     if avito_id.startswith("i"):
         avito_id = avito_id[1:]
@@ -196,7 +193,7 @@ async def parse_phone_image_for_item(page: Page, item, idx_on_page: int) -> Opti
             continue
 
     if not phone_button:
-        print(f"⚠️ [{avito_id}] Кнопка 'Показать телефон' не найдена.")
+        print(f"[{avito_id}] Кнопка 'Показать телефон' не найдена.")
         return None
 
     await human_sleep(1.0, 2.5)
@@ -205,24 +202,25 @@ async def parse_phone_image_for_item(page: Page, item, idx_on_page: int) -> Opti
         await phone_button.scroll_into_view_if_needed()
         await human_sleep(0.3, 0.7)
         await phone_button.click()
-        print(f"📞 [{avito_id}] Нажали 'Показать телефон' (#{idx_on_page}).")
+        print(f"[{avito_id}] Нажали 'Показать телефон' (#{idx_on_page}).")
     except Exception as e:
-        print(f"⚠️ [{avito_id}] Не удалось кликнуть по кнопке телефона: {e}")
+        print(f"[{avito_id}] Не удалось кликнуть по кнопке телефона: {e}")
         return None
 
-    print(f"⏳ [{avito_id}] Ждём {CLICK_DELAY} секунд после клика...")
+    print(f"[{avito_id}] Ждём {CLICK_DELAY} секунд после клика...")
     await asyncio.sleep(CLICK_DELAY)
 
     if await close_login_modal_if_exists(page):
         return None
     if await is_captcha_or_block(page):
-        print("🚫 Капча/блок после клика телефона.")
+        print("Капча/блок после клика телефона.")
         return None
 
     return await extract_phone_image_data(item, page, avito_id)
 
 
-# ========== ОСНОВНОЙ СЦЕНАРИЙ ==========
+# ОСНОВНОЙ СЦЕНАРИЙ
+
 
 async def main():
     launch_kwargs = {
@@ -254,42 +252,42 @@ async def main():
 
         page = await context.new_page()
 
-        print(f"➡️ Открываем {CATEGORY_URL}")
+        print(f"Открываем {CATEGORY_URL}")
         try:
             await page.goto(CATEGORY_URL, wait_until="load", timeout=NAV_TIMEOUT)
         except PWTimeoutError:
-            print("⚠️ Навигация по таймауту — продолжаем с тем, что есть...")
+            print("Навигация по таймауту — продолжаем с тем, что есть...")
 
         # РУЧНОЙ ЛОГИН
-        print("\n🔑 Твои действия:")
-        print("   • если есть капча — реши;")
-        print("   • залогинься в Авито;")
-        print("   • вернись на страницу со списком объявлений.")
-        input("👉 Когда на экране список объявлений, нажми Enter в консоли.\n")
+        print("\nВаши действия:")
+        print("   если есть капча — реши;")
+        print("   залогинься в Авито;")
+        print("   вернись на страницу со списком объявлений.")
+        input("Когда на экране список объявлений, нажми Enter в консоли.\n")
 
         await asyncio.sleep(3)
 
         if await is_captcha_or_block(page):
-            print("❌ Всё ещё капча/блок — выходим.")
+            print("Всё ещё капча/блок — выходим.")
             await browser.close()
             return
 
         await close_city_or_cookie_modals(page)
 
-        # ждём карточки
+        # Ждём карточки
         try:
             await page.wait_for_selector('div[data-marker="item"]', timeout=30000)
         except PWTimeoutError:
-            print("⚠️ Не вижу объявлений. Проверь, что реально открыт список.")
+            print("Не видим объявлений. Проверьте, что список открыт.")
             print((await safe_get_content(page))[:1200])
             await browser.close()
             return
 
-        print(f"⏳ Ждём {PAGE_DELAY} секунд перед обработкой...")
+        print(f"Ждём {PAGE_DELAY} секунд перед обработкой...")
         await asyncio.sleep(PAGE_DELAY)
 
         items = await page.query_selector_all('div[data-marker="item"]')
-        print(f"🔎 Найдено карточек на странице: {len(items)}")
+        print(f"Найдено карточек на странице: {len(items)}")
 
         phones_map: Dict[str, str] = {}
         found_count = 0
@@ -302,7 +300,7 @@ async def main():
                 url_el = await item.query_selector('a[itemprop="url"]')
                 url = await url_el.get_attribute("href") if url_el else None
                 if not url:
-                    print("⚠️ У карточки нет ссылки, пропускаем.")
+                    print("У карточки нет ссылки, пропускаем.")
                     continue
 
                 data_uri = await parse_phone_image_for_item(page, item, idx)
@@ -310,9 +308,9 @@ async def main():
                 if data_uri:
                     phones_map[url] = data_uri  # data:image/png;base64,...
                     found_count += 1
-                    print(f"💾 Map: {url} -> [data:image...], всего {found_count}/{MAX_ITEMS}")
+                    print(f"Map: {url} -> [data:image...], всего {found_count}/{MAX_ITEMS}")
                 else:
-                    print("⏭ Картинка не найдена, лимит не трогаем.")
+                    print("Картинка не найдена, лимит не трогаем.")
 
                 await human_sleep(2.0, 5.0)
 
@@ -323,7 +321,7 @@ async def main():
 
         out_file = OUT_DIR / "phones_map.json"
         out_file.write_text(json.dumps(phones_map, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"\n✅ Готово. Сохранено {len(phones_map)} записей в {out_file}")
+        print(f"\nГотово. Сохранено {len(phones_map)} записей в {out_file}")
 
 
 if __name__ == "__main__":
