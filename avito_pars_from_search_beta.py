@@ -1,7 +1,5 @@
 # avito_async.py
-import json
-import random
-import asyncio
+import json, random, asyncio
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -288,7 +286,8 @@ async def main():
         print(f"Найдено карточек на странице: {len(items)}")
 
         phones_map: Dict[str, str] = {}
-
+        found_count = 0
+        
         for idx, item in enumerate(items, start=1):
             if found_count >= MAX_ITEMS:
                 break
