@@ -22,16 +22,16 @@ URL_COLUMN = None   # Имя колонки со ссылками; None = иск
 
 # ПАПКИ И ОСНОВНЫЕ ВЫХОДНЫЕ ФАЙЛЫ
 OUT_DIR = Path("avito_phones_playwright")  # Рабочая директория парсера
-OUT_DIR.mkdir(exist_ok=True)  # mkdir - создание папки, если её нет
+OUT_DIR.mkdir(exist_ok=True)    # mkdir - создание папки, если её нет
 IMG_DIR = (OUT_DIR / "phones")  # Сюда будут сохраняться PNG с номерами (если SAVE_DATA_URI = False  (То что не провряли давно и не используется))
 IMG_DIR.mkdir(exist_ok=True)
-DEBUG_DIR = OUT_DIR / "debug"  # Сюда складываем скриншоты и html проблемных объявлений
+DEBUG_DIR = OUT_DIR / "debug"   # Сюда складываем скриншоты и html проблемных объявлений
 DEBUG_DIR.mkdir(exist_ok=True)
 
-OUT_JSON = (OUT_DIR / "phones" / "phones_map.json")  # Основной результат: {url: data:image... или тег __SKIP_*__}
-PENDING_JSON = (OUT_DIR / "pending_review.json")     # Ссылки «на модерации» и с лимитом контактов (в разработке на будущее)
-SAVE_DATA_URI = (True)                               # True = сохраняем data:image в JSON; False = сохраняем PNG в IMG_DIR
-HEADLESS = False                                     # False = браузер виден (можно логиниться руками)
+OUT_JSON = (OUT_DIR / "phones" / "phones_map.json")          # Основной результат: {url: data:image... или тег __SKIP_*__}
+PENDING_JSON = (OUT_DIR / "phones" / "pending_review.json")  # Ссылки «на модерации» и с лимитом контактов (в разработке на будущее)
+SAVE_DATA_URI = (True)                                       # True = сохраняем data:image в JSON; False = сохраняем PNG в IMG_DIR
+HEADLESS = False                                             # False = браузер виден (можно логиниться руками)
 
 # ОБЪЁМ И ПАРАЛЛЕЛЬНОСТЬ
 TEST_TOTAL = 766  # Максимум объявлений за один запуск (обрежется по списку ссылок)
@@ -507,7 +507,7 @@ def dump_debug(page: Page, url: str):
     Сохраняет скриншот и HTML проблемной страницы для отладки.
     '''
     try:
-        ad_id = get_avito_id_from_url(url)  # Получение ID объявления из URL
+        ad_id = get_avito_id_from_url(url)     # Получение ID объявления из URL
         png_path = DEBUG_DIR / f"{ad_id}.png"  # Пути
         html_path = DEBUG_DIR / f"{ad_id}.html"
         page.screenshot(path=str(png_path), full_page=True)  # Создание скриншота всей страницы
@@ -521,6 +521,10 @@ def dump_debug(page: Page, url: str):
 # ЛОГИКА КЛИКА / ИЗВЛЕЧЕНИЯ
 
 def click_show_phone_on_ad(page: Page) -> bool:
+    '''
+    Пытается найти и кликнуть на кнопку "Показать телефон" в объявлении.
+    Return: True если кнопка найдена и клик выполнен
+    '''
     human_scroll_jitter(page)
 
     for anchor in [
@@ -530,40 +534,40 @@ def click_show_phone_on_ad(page: Page) -> bool:
         "section:has(button:has-text('Показать'))",
     ]:
         try:
-            a = page.query_selector(anchor)
+            a = page.query_selector(anchor)     # Поиск якорного элемента
             if a:
-                a.scroll_into_view_if_needed()
+                a.scroll_into_view_if_needed()  # Прокрутка к элементу, если элемент найден
                 human_sleep(*HUMAN["scroll_pause_s"])
                 break
         except Exception:
             pass
 
     selector_groups = [
-        [
+        [  # data-maker селекторы
             "button[data-marker='item-phone-button']",
             "button[data-marker='phone-button/number']",
             "button[data-marker*='phone-button']",
         ],
-        [
+        [  # Текстовые селекторы
             "button:has-text('Показать телефон')",
             "button:has-text('Показать номер')",
             "a:has-text('Показать телефон')",
             "a:has-text('Показать номер')",
         ],
-        [
+        [  # aria-label селекторы
             "button[aria-label*='Показать телефон']",
             "button[aria-label*='Показать номер']",
         ],
-        [
+        [  # Общие селекторы
             "[data-marker*='phone'] button",
             "[data-marker*='contacts'] button",
         ],
     ]
 
     if HUMAN["randomize_selectors"]:
-        random.shuffle(selector_groups)
+        random.shuffle(selector_groups)  # Перемешивание групп
         for g in selector_groups:
-            random.shuffle(g)
+            random.shuffle(g)  # Перемешивание селекторов внутри группы
 
     try:
         page.wait_for_selector("button", timeout=2000)
@@ -581,8 +585,8 @@ def click_show_phone_on_ad(page: Page) -> bool:
             except Exception:
                 continue
 
-    try:
-        sticky = page.query_selector("footer:has(button)")
+    try: # Липкий футер "прилипает" к нижней части экрана и остается видимым при прокрутке страницы
+        sticky = page.query_selector("footer:has(button)")  
         if sticky:
             btn = sticky.query_selector("button")
             if btn and btn.is_visible() and btn.is_enabled():
@@ -597,8 +601,12 @@ def click_show_phone_on_ad(page: Page) -> bool:
 
 
 def extract_phone_data_uri_on_ad(page: Page) -> str | None:
-    try:
-        img = page.query_selector("img[data-marker='phone-image']")
+    '''
+    Извлекает data:image URI с изображением телефона со страницы. 
+    Return: data:image URI или None если изображение не найдено
+    '''
+    try:  # Попытка поиска изображения телефона
+        img = page.query_selector("img[data-marker='phone-image']")  # Поиск изображения по data-maker
     except PWError:
         img = None
 
@@ -620,20 +628,29 @@ def extract_phone_data_uri_on_ad(page: Page) -> str | None:
 # ПУЛ ВКЛАДОК (ТАБОВ) И ОБРАБОТКА СПИСКОВ
 
 def make_page_pool(context, size: int) -> list[Page]:
-    return [context.new_page() for _ in range(size)]
+    '''
+    Создает пул страниц браузера.
+    Return: Список объектов Page
+    '''
+    return [context.new_page() for _ in range(size)]  # Создание списка страниц
 
 
-def process_urls_with_pool(
-    context, urls: list[str], on_result, pending_queue: list[str]
-):
-    """Основной проход: переиспользуем вкладки и ждём DOMContentLoaded; добавлены рассинхроны."""
+def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: list[str]):
+    '''
+    Обрабатывает список URL с использованием пула страниц.
+    Args:
+        context: Контекст браузера Playwright
+        urls: Список URL для обработки
+        on_result: Функция обратного вызова для сохранения результатов
+        pending_queue: Список для добавления отложенных URL
+    '''
     if not urls:
         return
 
     # Пул создаём максимального размера; часть вкладок можем не использовать
     pages = make_page_pool(context, CONCURRENCY)
     try:
-        it = iter(urls)
+        it = iter(urls)  # Итератор по URL
         while True:
             # Иногда делаем партию меньше максимума, чтобы поведение было менее ровным
             batch_size = (
@@ -643,8 +660,8 @@ def process_urls_with_pool(
             )
             batch_pages = pages[:batch_size]
 
-            batch = []
-            for idx, p in enumerate(batch_pages):
+            batch = []  # Инициализация списка для текущей партии
+            for idx, p in enumerate(batch_pages):  # Цикл по страницам партии
                 try:
                     url = next(it)
                 except StopIteration:
@@ -710,8 +727,8 @@ def process_urls_with_pool(
             human_sleep(*HUMAN["click_delay_jitter"])
             for url, p in batch:
                 human_pause_jitter()
-                if close_login_modal_if_exists(p) or is_captcha_or_block(p):
-                    continue
+                if close_login_modal_if_exists(p) or is_captcha_or_block(p):  # Проверка модалок и блокировок
+                    continue  # Пропуск объявления 
                 data_uri = extract_phone_data_uri_on_ad(p)
                 if not data_uri:
                     continue
@@ -720,42 +737,45 @@ def process_urls_with_pool(
                 else:
                     avito_id = get_avito_id_from_url(url)
                     out_path = save_phone_png_from_data_uri(data_uri, avito_id)
-                    if not out_path:
+                    if not out_path:  # Проверка успешности сохранения
                         continue
-                    value = out_path
-                on_result(url, value)
+                    value = out_path   # Использование пути к файлу
+                on_result(url, value)  # Сохранение результата
                 print(f"{url} -> {'[data:image...]' if SAVE_DATA_URI else value}")
 
-            # Пауза между партиями — тоже чуть шире
-            human_sleep(*PAGE_DELAY_BETWEEN_BATCHES)
+            human_sleep(*PAGE_DELAY_BETWEEN_BATCHES)  # Пауза между партиями
     finally:
         for p in pages:
             try:
                 human_sleep(*CLOSE_STAGGER_BETWEEN_TABS)
-                p.close()
+                p.close()  # Закрытие страницы
             except Exception:
                 pass
 
 
-# ПЕРЕПРОВЕРКА ОЧЕРЕДИ PENDING (КОРОТКИЙ ПРОХОД)
-
 def recheck_pending_once(context, on_result):
-    pend = load_pending(PENDING_JSON)
+    '''
+    Повторно проверяет отложенные ссылки.
+    Args:
+        context: Контекст браузера Playwright
+        on_result: Функция обратного вызова для сохранения результатов
+    '''
+    pend = load_pending(PENDING_JSON)  # Загрузка отложенных ссылок
     if not pend:
         return
     print(f"\nПовторная проверка отложенных ссылок: {len(pend)}")
-    page = context.new_page()
-    still = []
+    page = context.new_page()  # Создание новой страницы для проверки
+    still = []  # Список ссылок, которые остаются отложенными
     for url in pend:
         try:
-            human_sleep(*NAV_STAGGER_BETWEEN_TABS)  # Тоже не открываем «в ноль»
-            page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
+            human_sleep(*NAV_STAGGER_BETWEEN_TABS)  # Пауза перед навигацией
+            page.goto(url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)  # Переход по URL
         except Exception:
             still.append(url)
             continue
         st = classify_ad_status(page)
-        if st in ("on_review", "limit"):
-            still.append(url)  # Пока рано
+        if st in ("on_review", "limit"):  # Проверка статусов, требующих повторной проверки
+            still.append(url)
         elif st == "no_calls":
             on_result(url, TAG_NO_CALLS)
         elif st == "unavailable" or st == "blocked":
@@ -767,24 +787,23 @@ def recheck_pending_once(context, on_result):
                 time.sleep(random.uniform(*HUMAN["click_delay_jitter"]))
                 data_uri = extract_phone_data_uri_on_ad(page)
                 if data_uri:
-                    if SAVE_DATA_URI:
+                    if SAVE_DATA_URI:  # Режим сохранения data:image
                         on_result(url, data_uri)
                     else:
-                        out = save_phone_png_from_data_uri(data_uri, get_avito_id_from_url(url))
+                        out = save_phone_png_from_data_uri(data_uri, get_avito_id_from_url(url))  # Сохранение PNG
                         if out:
-                            on_result(url, out)
-                    print(f"(повтор) {url}")
+                            on_result(url, out)  # Сохранение пути к файлу
+                    print(f"(повтор) {url}")  # Логирование успеха
                 else:
                     still.append(url)
-            else:
-                # Если сейчас стало «без звонков/недоступно»
+            else: # Если сейчас стало «без звонков/недоступно»
                 st2 = classify_ad_status(page)
                 if st2 == "no_calls":
-                    on_result(url, TAG_NO_CALLS)
+                    on_result(url, TAG_NO_CALLS)  # Сохранение результата
                 elif st2 in ("on_review", "limit"):
                     still.append(url)
                 else:
-                    on_result(url, TAG_UNAVAILABLE)
+                    on_result(url, TAG_UNAVAILABLE)  # Сохранение как недоступного
         human_sleep(0.8, 1.6)
     try:
         page.close()
@@ -797,6 +816,10 @@ def recheck_pending_once(context, on_result):
 # ОСНОВНОЙ СЦЕНАРИЙ
 
 def main():
+    '''
+    Основная функция парсера.
+    Координирует весь процесс парсинга телефонов с Avito.
+    '''
     urls = read_urls_from_excel_or_csv(INPUT_FILE, INPUT_SHEET, URL_COLUMN)
     urls = urls[:TEST_TOTAL]
 
@@ -813,25 +836,29 @@ def main():
         return
 
     def flush_progress():
+        '''
+        Внутренняя функция для сохранения прогресса.
+        Вызывается при завершении программы.
+        '''
         try:
-            atomic_write_json(OUT_JSON, phones_map)
-            save_pending(PENDING_JSON, pending_queue)
+            atomic_write_json(OUT_JSON, phones_map)    # Сохранение основного прогресса
+            save_pending(PENDING_JSON, pending_queue)  # Сохранение отложенных ссылок
         except Exception as e:
             print(f"Ошибка записи прогресса: {e}")
 
-    atexit.register(flush_progress)
+    atexit.register(flush_progress)  # Регистрация функции при завершении программы
     for sig in ("SIGINT", "SIGTERM"):
         try:
-            signal.signal(getattr(signal, sig), lambda *a: (flush_progress(), exit(1)))
+            signal.signal(getattr(signal, sig), lambda *a: (flush_progress(), exit(1))) # Установка обработчика сигнала
         except Exception:
             pass
 
-    with sync_playwright() as p:
-        launch_kwargs = {
-            "headless": HEADLESS,
+    with sync_playwright() as p:  # Создание контекста Playwright
+        launch_kwargs = {         # Параметры запуска браузера
+            "headless": HEADLESS, # Режим отображения браузера
             "args": [
                 "--disable-blink-features=AutomationControlled",
-                "--start-maximized",
+                "--start-maximized",  # max размер
             ],
         }
         if USE_PROXY:
@@ -841,27 +868,27 @@ def main():
                 "password": PROXY_PASSWORD,
             }
 
-        browser = p.chromium.launch(**launch_kwargs)
+        browser = p.chromium.launch(**launch_kwargs)  # Запуск браузера Chromium
 
         vp_w = random.randint(1200, 1400)
         vp_h = random.randint(760, 900)
 
-        context = browser.new_context(
+        context = browser.new_context(  # Создание нового контекста браузера
             viewport={"width": vp_w, "height": vp_h},
-            user_agent=UA,
+            user_agent=UA,  # Установка User-Agent
         )
-        context.set_default_navigation_timeout(NAV_TIMEOUT)
+        context.set_default_navigation_timeout(NAV_TIMEOUT)  # Установка таймаута навигации
         context.set_default_timeout(NAV_TIMEOUT)
 
         # Ручной логин на первой ссылке (если есть что открывать)
         seed_url = pending_queue[0] if pending_queue else (urls[0] if urls else None)
         if seed_url:
-            page = context.new_page()
+            page = context.new_page() # Создание новой страницы
             try:
                 page.goto(seed_url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
             except PWTimeoutError:
                 pass
-            print("\nТвои действия:")
+            print("\nТвои действия:")  # Инструкция пользователю
             print(" • если есть капча — реши;")
             print(" • залогинься в Авито;")
             print(" • оставь открытую страницу объявления.")
@@ -877,26 +904,31 @@ def main():
                 pass
 
         def on_result(url: str, value: str | None):
-            # value: data:image..., путь к PNG или __SKIP_*__
+            '''
+            Функция обратного вызова для сохранения результатов.
+            Args:
+                url: URL объявления
+                value: data:image..., путь к PNG или __SKIP_*__
+            '''
             if value is None:
                 return
             phones_map[url] = value
-            atomic_write_json(OUT_JSON, phones_map)
+            atomic_write_json(OUT_JSON, phones_map) # Сохранение прогресса
 
-        # 1) Сначала обрабатываем pending (сняв уже обработанные)
+        # Обработка отложенных ссылок (сняв уже обработанные)
         pending_queue = [u for u in pending_queue if u not in already_done]
         try:
             process_urls_with_pool(
                 context, pending_queue, on_result, pending_queue
-            )  # Новые «pending» добавятся в конец
+            )  # Обработка с добавлением новых отложенных в конец
         except KeyboardInterrupt:
             print("Остановлено пользователем (на pending).")
-            flush_progress()
+            flush_progress()  # Сохранение прогресса
 
-        # 2) Короткая перепроверка того, что ещё осталось в pending после шага 1
+        # Перепроверка оставшихся отложенных
         recheck_pending_once(context, on_result)
 
-        # 3) Теперь основной список из Excel
+        # Основной список из Excel
         try:
             process_urls_with_pool(context, urls, on_result, pending_queue)
         except KeyboardInterrupt:
