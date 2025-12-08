@@ -10,12 +10,14 @@ __pycache__/
 *.so
 
 #bugs
-avito_phones_playwright/debug/
-avito_phones_playwright/phones/
+avito_phones_playwright/debug/*.png
+avito_phones_playwright/debug/*.html
+avito_phones_playwright/phones/*.json
 
 # output
 phones_output.xlsx
 avito_phones_playwright/pending_review.json
+new_ads/*.xlsx
 
 # Distribution / packaging
 .Python

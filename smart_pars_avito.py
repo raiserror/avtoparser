@@ -15,7 +15,7 @@ from playwright.sync_api import (
 )
 
 # ВХОДНОЙ ФАЙЛ С ССЫЛКАМИ
-INPUT_FILE = Path("РЕМОНТ МСК МО 13.11.xlsx")  # Имя Excel/CSV-файла с ссылками на объявления
+INPUT_FILE = Path("new_ads/АВТОСАЛОН 05.12.xlsx")  # Имя Excel/CSV-файла с ссылками на объявления
 
 INPUT_SHEET = None  # Имя листа в Excel; None = использовать все листы
 URL_COLUMN = None   # Имя колонки со ссылками; None = искать ссылки во всех колонках
@@ -373,13 +373,21 @@ def classify_ad_status(page: Page) -> str:
 
     html = safe_get_content(page).lower()
 
-    checking = {'MODERATION_MARKERS':"on_review", 'UNAVAILABLE_MARKERS':"unavailable", 'NO_CALLS_MARKERS':"no_calls"}
-    
-    if is_limit_contacts_modal(page):  # Проверка лимита контактов
+    # Проверка лимита контактов
+    if is_limit_contacts_modal(page):
         return "limit"
-    for mode, return_text in checking.items():
-        if any(m in html for m in mode):
-            return return_text  # Проверка модерации, доступности, режима "без звонков"
+    
+    # Проверка модерации
+    if any(m in html for m in MODERATION_MARKERS):
+        return "on_review"
+    
+    # Проверка доступности
+    if any(m in html for m in UNAVAILABLE_MARKERS):
+        return "unavailable"
+    
+    # Проверка режима "без звонков"
+    if any(m in html for m in NO_CALLS_MARKERS):
+        return "no_calls"
 
     try:
         if page.locator("text=Без звонков").first.is_visible():
@@ -534,7 +542,7 @@ def click_show_phone_on_ad(page: Page) -> bool:
         "section:has(button:has-text('Показать'))",
     ]:
         try:
-            a = page.query_selector(anchor)     # Поиск якорного элемента
+            a = page.query_selector(anchor)  # Поиск якорного элемента
             if a:
                 a.scroll_into_view_if_needed()  # Прокрутка к элементу, если элемент найден
                 human_sleep(*HUMAN["scroll_pause_s"])
@@ -543,7 +551,7 @@ def click_show_phone_on_ad(page: Page) -> bool:
             pass
 
     selector_groups = [
-        [  # data-maker селекторы
+        [  # data-marker селекторы
             "button[data-marker='item-phone-button']",
             "button[data-marker='phone-button/number']",
             "button[data-marker*='phone-button']",
@@ -551,16 +559,6 @@ def click_show_phone_on_ad(page: Page) -> bool:
         [  # Текстовые селекторы
             "button:has-text('Показать телефон')",
             "button:has-text('Показать номер')",
-            "a:has-text('Показать телефон')",
-            "a:has-text('Показать номер')",
-        ],
-        [  # aria-label селекторы
-            "button[aria-label*='Показать телефон']",
-            "button[aria-label*='Показать номер']",
-        ],
-        [  # Общие селекторы
-            "[data-marker*='phone'] button",
-            "[data-marker*='contacts'] button",
         ],
     ]
 
@@ -581,24 +579,28 @@ def click_show_phone_on_ad(page: Page) -> bool:
                 if el and el.is_visible() and el.is_enabled():
                     if try_click(page, el):
                         print("Нажали 'Показать телефон'.")
+                        
+                        # Ждем появление номера или модалки авторизации
+                        try:
+                            # Ждем либо номер телефона, либо модалку авторизации
+                            page.wait_for_selector(
+                                "img[data-marker='phone-image'], [data-marker='login-form']", 
+                                timeout=5000
+                            )
+                        except Exception:
+                            pass
+                        
+                        # Проверяем, появилась ли модалка авторизации
+                        if page.query_selector("[data-marker='login-form']"):
+                            print("Обнаружена модалка авторизации после клика")
+                            return False
+                        
                         return True
             except Exception:
                 continue
 
-    try: # Липкий футер "прилипает" к нижней части экрана и остается видимым при прокрутке страницы
-        sticky = page.query_selector("footer:has(button)")  
-        if sticky:
-            btn = sticky.query_selector("button")
-            if btn and btn.is_visible() and btn.is_enabled():
-                if try_click(page, btn):
-                    print("Нажали кнопку в липком футере.")
-                    return True
-    except Exception:
-        pass
-
     print("Кнопка 'Показать телефон' не найдена.")
     return False
-
 
 def extract_phone_data_uri_on_ad(page: Page) -> str | None:
     '''
@@ -687,11 +689,6 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
                 if st == "blocked":
                     print(f"Капча/блок: {url}")
                     continue
-                if st == "on_review":
-                    print(f"На проверке: {url}")
-                    on_result(url, TAG_ON_REVIEW)
-                    pending_queue.append(url)
-                    continue
                 if st == "limit":
                     print(f"Лимит контактов: {url}")
                     on_result(url, TAG_LIMIT)
@@ -705,24 +702,27 @@ def process_urls_with_pool(context, urls: list[str], on_result, pending_queue: l
                     print(f"Без звонков: {url}")
                     on_result(url, TAG_NO_CALLS)
                     continue
-
+                if st == "on_review":
+                    print(f"На проверке: {url}")
+                    on_result(url, TAG_ON_REVIEW)
+                    pending_queue.append(url)
+                    continue
                 close_city_or_cookie_modals(p)
                 if not click_show_phone_on_ad(p):
                     # Проверим ещё раз — вдруг это всё же on_review/limit/и т.д.
                     st2 = classify_ad_status(p)
-                    if st2 == "on_review":
-                        on_result(url, TAG_ON_REVIEW)
-                        pending_queue.append(url)
-                    elif st2 == "limit":
+                    if st2 == "limit":
                         on_result(url, TAG_LIMIT)
                         pending_queue.append(url)
                     elif st2 == "unavailable":
                         on_result(url, TAG_UNAVAILABLE)
                     elif st2 == "no_calls":
                         on_result(url, TAG_NO_CALLS)
+                    if st2 == "on_review":
+                        on_result(url, TAG_ON_REVIEW)
+                        pending_queue.append(url)
                     else:
                         dump_debug(p, url)
-
             # Ждём картинку телефона (с небольшим джиттером между объявлениями)
             human_sleep(*HUMAN["click_delay_jitter"])
             for url, p in batch:

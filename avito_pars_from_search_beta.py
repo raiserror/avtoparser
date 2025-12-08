@@ -1,7 +1,7 @@
 # avito_async.py
-import json, random, asyncio
+import json, random, asyncio, time
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 from playwright.async_api import (
     async_playwright,
@@ -11,42 +11,40 @@ from playwright.async_api import (
 )
 
 # НАСТРОЙКИ
-
 CATEGORY_URL = "https://www.avito.ru/moskva/kvartiry/sdam/na_dlitelnyy_srok-ASgBAgICAkSSA8gQ8AeQUg?user=1"
-
 OUT_DIR = Path("avito_phones_playwright")
 OUT_DIR.mkdir(exist_ok=True)
 
-HEADLESS = False  # Обязательно False — логинимся руками
-MAX_ITEMS = 5     # 5 ОБЪЯВЛЕНИЙ С НАЙДЕННОЙ КАРТИНКОЙ НОМЕРА
+HEADLESS = False
+MAX_ITEMS = 100  # ОБЪЯВЛЕНИЙ С НАЙДЕННОЙ КАРТИНКОЙ НОМЕРА
+MAX_CONCURRENT_TASKS = 3
+PAGE_DELAY = 3
+CLICK_DELAY = 5
+NAV_TIMEOUT = 60_000
 
-PAGE_DELAY = 5
-CLICK_DELAY = 8
-NAV_TIMEOUT = 90_000
-
-USE_PROXY = False  # При необходимости включаем
+USE_PROXY = False
 PROXY_HOST = "mproxy.site"
 PROXY_PORT = 228
 PROXY_LOGIN = ""
 PROXY_PASSWORD = ""
 
-
 # ХЕЛПЕРЫ
 
 async def human_sleep(a: float, b: float):
+    """Случайная задержка"""
     await asyncio.sleep(random.uniform(a, b))
 
-
 async def safe_get_content(page: Page) -> str:
-    for _ in range(2):  # Проверяем 2 раза с ожиданием - секунда
+    """Безопасное получение содержимого"""
+    for _ in range(2):
         try:
             return await page.content()
         except PWError:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.7)
     return ""
 
-
 async def is_captcha_or_block(page: Page) -> bool:
+    """Быстрая проверка на блокировку"""
     try:
         url = (page.url or "").lower()
     except PWError:
@@ -56,10 +54,10 @@ async def is_captcha_or_block(page: Page) -> bool:
         "captcha" in url or 
         "firewall" in url or
         "доступ с вашего ip-адреса временно ограничен" in html
-    )  # Проверка капчи True / False
-
+    )
 
 async def close_city_or_cookie_modals(page: Page):
+    """Быстрое закрытие модальных окон"""
     selectors = [
         "button[aria-label='Закрыть']",
         "button[data-marker='modal-close']",
@@ -73,7 +71,7 @@ async def close_city_or_cookie_modals(page: Page):
                 try:
                     if await b.is_visible():
                         await b.click()
-                        await human_sleep(0.3, 0.8)
+                        await human_sleep(0.2, 0.5)
                 except Exception:
                     continue
         except Exception:
@@ -105,7 +103,6 @@ async def close_login_modal_if_exists(page: Page) -> bool:
             if not await m.is_visible():
                 continue
 
-            # Пробуем найти любую кнопку закрытия
             for btn_sel in close_selectors:
                 btn = await m.query_selector(btn_sel)
                 if btn:
@@ -123,102 +120,147 @@ async def close_login_modal_if_exists(page: Page) -> bool:
 
     return False
 
-
-async def extract_phone_image_data(item, page: Page, avito_id: str) -> Optional[str]:
+async def extract_phone_image_data(page: Page, avito_id: str) -> Optional[str]:
     """
     После клика ищем img[data-marker='phone-image'],
     возвращаем data:image/png;base64,... (без сохранения PNG).
     """
-    # Сначала ищем в пределах карточки
     try:
-        img = await item.query_selector("img[data-marker='phone-image']")
-    except PWError:
-        img = None
-
-    # На всякий случай пробуем по всей странице
-    if not img:
-        try:
-            img = await page.query_selector("img[data-marker='phone-image']")
-        except PWError:
-            img = None
-
-    if not img:
-        print(f"[{avito_id}] Картинка с номером не найдена.")
-        return None
-
-    # Получаем src атрибут
-    try:
-        src = (await img.get_attribute("src")) or ""
-    except Exception:
-        src = ""
-        
-    if not src.startswith("data:image"):
-        print(f"[{avito_id}] src не data:image, а: {src[:40]}...")
-        return None
-
-    print(f"[{avito_id}] Получен data:image (длина {len(src)}).")
-    return src  # Просто возвращаем data-URI, не декодируем
-
-
-async def parse_phone_image_for_item(page: Page, item, idx_on_page: int) -> Optional[str]:
-    """Кликает ТОЛЬКО по 'Показать телефон/номер' и возвращает data:image... или None."""
-    avito_id = (await item.get_attribute("id") or "").lstrip("i")
-
-    # hover — чуть-чуть по-человечески
-    try:
-        await item.hover()
-        await human_sleep(0.5, 1.0)
-    except Exception:
-        pass
-
-    # Ищем именно кнопку "Показать телефон/номер"
-    btn_selectors = [
-        "button[data-marker='item-phone-button']",
-        "button:has-text('Показать телефон')",
-        "button:has-text('Показать номер')",
-        "button[aria-label*='Показать телефон']",
-        "button[aria-label*='Показать номер']",
-    ]
-    phone_button = None
-    for sel in btn_selectors:
-        try:
-            b = await item.query_selector(sel)
-            if b and await b.is_enabled() and await b.is_visible():
-                phone_button = b
-                break
-        except Exception:
-            continue
-
-    if not phone_button:
-        print(f"[{avito_id}] Кнопка 'Показать телефон' не найдена.")
-        return None
-
-    await human_sleep(1.0, 2.5)
-
-    try:
-        await phone_button.scroll_into_view_if_needed()
-        await human_sleep(0.3, 0.7)
-        await phone_button.click()
-        print(f"[{avito_id}] Нажали 'Показать телефон' (#{idx_on_page}).")
+        img = await page.query_selector("img[data-marker='phone-image']")
+        if img:
+            src = await img.get_attribute("src")
+            if src and src.startswith("data:image"):
+                return src
     except Exception as e:
-        print(f"[{avito_id}] Не удалось кликнуть по кнопке телефона: {e}")
-        return None
+        print(f"Ошибка при извлечении номера: {e}")
 
-    print(f"[{avito_id}] Ждём {CLICK_DELAY} секунд после клика...")
-    await asyncio.sleep(CLICK_DELAY)
+    # Альтернативно: ищем текст с номером
+    try:
+        phone_text = await page.query_selector("[data-marker='phone-popup']")
+        if phone_text:
+            text_content = await phone_text.text_content()
+            if text_content and any(c.isdigit() for c in text_content):
+                digits = ''.join(filter(str.isdigit, text_content))
+                if 9 <= len(digits) <= 12:
+                    return digits
+    except:
+        pass
+    
+    return None
 
-    if await close_login_modal_if_exists(page):
-        return None
-    if await is_captcha_or_block(page):
-        print("Капча/блок после клика телефона.")
-        return None
+async def process_single_item(item, page: Page, idx: int, semaphore: asyncio.Semaphore) -> Optional[tuple[str, str]]:
+    """Обработка одной карточки с семафором"""
+    async with semaphore:
+        try:
+            # Получаем URL объявления
+            url_el = await item.query_selector('a[itemprop="url"]')
+            if not url_el:
+                return None
+            
+            url = await url_el.get_attribute("href")
+            if not url:
+                return None
+            
+            avito_id = (await item.get_attribute("id") or "").lstrip("i")
+            print(f"[{avito_id}] Обработка карточки #{idx}...")
+            
+            # hover
+            try:
+                await item.hover()
+                await human_sleep(0.3, 0.7)
+            except Exception:
+                pass
 
-    return await extract_phone_image_data(item, page, avito_id)
+            # Ищем кнопку телефона
+            btn_selectors = [
+                "button[data-marker='item-phone-button']",
+                "button:has-text('Показать телефон')",
+                "button:has-text('Показать номер')",
+                "button[aria-label*='Показать телефон']",
+                "button[aria-label*='Показать номер']",
+            ]
+            
+            phone_button = None
+            for sel in btn_selectors:
+                try:
+                    b = await item.query_selector(sel)
+                    if b and await b.is_enabled() and await b.is_visible():
+                        phone_button = b
+                        break
+                except Exception:
+                    continue
 
+            if not phone_button:
+                print(f"[{avito_id}] Кнопка 'Показать телефон' не найдена.")
+                return None
 
-# ОСНОВНОЙ СЦЕНАРИЙ
+            await human_sleep(0.5, 1.5)
+
+            # Кликаем
+            try:
+                await phone_button.scroll_into_view_if_needed()
+                await human_sleep(0.2, 0.5)
+                await phone_button.click()
+                print(f"[{avito_id}] Нажали 'Показать телефон' (#{idx}).")
+            except Exception as e:
+                print(f"[{avito_id}] Не удалось кликнуть: {e}")
+                return None
+
+            # Ожидание после клика
+            await asyncio.sleep(CLICK_DELAY)
+
+            # Проверка модалок и капчи
+            if await close_login_modal_if_exists(page):
+                return None
+            
+            if await is_captcha_or_block(page):
+                print("Капча/блок после клика телефона.")
+                return None
+
+            # Извлекаем номер
+            phone_data = await extract_phone_image_data(page, avito_id)
+            
+            if phone_data:
+                print(f"[{avito_id}] Успешно получен номер")
+                return (url, phone_data)
+            
+            return None
+            
+        except Exception as e:
+            print(f"Ошибка при обработке карточки #{idx}: {e}")
+            return None
+
+async def process_items_concurrently(page: Page, items: List) -> Dict[str, str]:
+    """Параллельная обработка карточек"""
+    phones_map = {}
+    
+    # Создаем семафор для ограничения одновременных операций
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+    
+    # Создаем задачи для обработки
+    tasks = []
+    for idx, item in enumerate(items[:MAX_ITEMS], 1):
+        task = process_single_item(item, page, idx, semaphore)
+        tasks.append(task)
+    
+    # Запускаем все задачи параллельно
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Собираем результаты
+    for result in results:
+        if isinstance(result, Exception):
+            print(f"Исключение в задаче: {result}")
+            continue
+            
+        if result:
+            url, phone_data = result
+            phones_map[url] = phone_data
+    
+    return phones_map
 
 async def main():
+    start_time = time.time()
+    
     # Конфигурация браузера
     launch_kwargs = {
         "headless": HEADLESS,
@@ -227,6 +269,7 @@ async def main():
             "--start-maximized",
         ],
     }
+    
     if USE_PROXY:
         launch_kwargs["proxy"] = {
             "server": f"http://{PROXY_HOST}:{PROXY_PORT}",
@@ -243,6 +286,8 @@ async def main():
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/120.0.0.0 Safari/537.36"
             ),
+            locale="ru-RU",
+            timezone_id="Europe/Moscow",
         )
         context.set_default_navigation_timeout(NAV_TIMEOUT)
         context.set_default_timeout(NAV_TIMEOUT)
@@ -252,7 +297,7 @@ async def main():
         # Переход на страницу категории
         print(f"Открываем {CATEGORY_URL}")
         try:
-            await page.goto(CATEGORY_URL, wait_until="load", timeout=NAV_TIMEOUT)
+            await page.goto(CATEGORY_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
         except PWTimeoutError:
             print("Таймаут навигации — продолжаем с тем, что есть...")
 
@@ -263,7 +308,7 @@ async def main():
         print(" • Вернитесь на страницу с объявлениями.")
         input("Когда на экране список объявлений, нажми Enter в консоли.\n")
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
         # Проверка блокировок
         if await is_captcha_or_block(page):
@@ -277,52 +322,43 @@ async def main():
         try:
             await page.wait_for_selector('div[data-marker="item"]', timeout=30000)
         except PWTimeoutError:
-            print("Не видим объявлений. Проверьте, что список открыт.")
-            print((await safe_get_content(page))[:1200])
+            print("Не видим объявлений.")
             await browser.close()
             return
 
         print(f"Ждём {PAGE_DELAY} секунд перед обработкой...")
         await asyncio.sleep(PAGE_DELAY)
 
+        # Получаем все карточки
         items = await page.query_selector_all('div[data-marker="item"]')
-        print(f"Найдено карточек на странице: {len(items)}")
-
-        phones_map: Dict[str, str] = {}
-        found_count = 0
+        print(f"Найдено карточек: {len(items)}")
         
-        for idx, item in enumerate(items, start=1):
-            if found_count >= MAX_ITEMS:
-                break
-
-            try:
-                # Получение URL объявления
-                url_el = await item.query_selector('a[itemprop="url"]')
-                url = await url_el.get_attribute("href") if url_el else None
-                if not url:
-                    print("Пропуск карточки #{idx} (нет ссылки)")
-                    continue
-                
-                # Извлечение номера
-                data_uri = await parse_phone_image_for_item(page, item, idx)
-
-                if data_uri:
-                    phones_map[url] = data_uri  # data:image/png;base64,...
-                    print(f"Добавлено: {url} -> [data:image...], всего {len(phones_map)}/{MAX_ITEMS}")
-                else:
-                    print(f"Пропуск карточки #{idx} (номер не найден)")
-
-                await human_sleep(2.0, 5.0)
-
-            except Exception as e:
-                print(f"Ошибка в карточке #{idx}:", e)
-
-        out_file = OUT_DIR / "phones_map.json"
-        out_file.write_text(json.dumps(phones_map, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"\nГотово. Сохранено {len(phones_map)} записей в {out_file}")
+        if not items:
+            print("Нет карточек для обработки")
+            await browser.close()
+            return
+        
+        # Параллельная обработка карточек
+        phones_map = await process_items_concurrently(page, items)
+        
+        elapsed_time = time.time() - start_time
+        
+        # Сохранение результатов
+        if phones_map:
+            out_file = OUT_DIR / "phones" / "phones_fast.json"
+            out_file.write_text(
+                json.dumps(phones_map, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            
+            print(f"\n=== РЕЗУЛЬТАТ ===")
+            print(f"Успешно получено номеров: {len(phones_map)}")
+            print(f"Время выполнения: {elapsed_time:.1f} секунд")
+            print(f"Файл сохранён: {out_file}")
+        else:
+            print("Нет данных для сохранения")
         
         await browser.close()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
